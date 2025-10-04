@@ -1,15 +1,18 @@
 import express, { Router, type Request, type Response } from "express";
-import bcrypt from "bcryptjs";
-import jwt from "jsonwebtoken";
-import db, { type Todo, type User } from "../db.js";
+import prisma from "../prisma-client.js";
 
 const router: Router = express.Router();
 
 // Get all todos for logged-in user
-router.get("/", (req: Request & { userId?: number }, res: Response) => {
+router.get("/", async (req: Request & { userId?: number }, res: Response) => {
+  if (!req.userId) {
+    res.status(401).json({ message: "User not authenticated" });
+    return;
+  }
   try {
-    const getTodos = db.prepare("SELECT * FROM todos WHERE user_id = ?");
-    const todos = getTodos.all(req.userId) as Todo[];
+    const todos = await prisma.todo.findMany({
+      where: { userId: req.userId },
+    });
     res.json(todos);
   } catch (error) {
     console.error("Error fetching todos:", error);
@@ -18,23 +21,24 @@ router.get("/", (req: Request & { userId?: number }, res: Response) => {
 });
 
 // Create a new todo for logged-in user
-router.post("/", (req: Request & { userId?: number }, res: Response) => {
+router.post("/", async (req: Request & { userId?: number }, res: Response) => {
   const { task, completed } = req.body;
+  if (!req.userId) {
+    res.status(401).json({ message: "User not authenticated" });
+    return;
+  }
   if (!task) {
     res.status(400).json({ message: "Task is required" });
     return;
   }
   try {
-    const insertTodo = db.prepare(
-      "INSERT INTO todos (user_id, task, completed) VALUES (?, ?, ?)"
-    );
-    const result = insertTodo.run(req.userId, task, completed ? 1 : 0);
-    const newTodo = {
-      id: result.lastInsertRowid,
-      user_id: req.userId,
-      task,
-      completed: completed ? 1 : 0,
-    };
+    const newTodo = await prisma.todo.create({
+      data: {
+        userId: req.userId,
+        task,
+        completed: !!completed,
+      },
+    });
     res.status(201).json(newTodo);
   } catch (error) {
     console.error("Error creating todo:", error);
@@ -43,38 +47,51 @@ router.post("/", (req: Request & { userId?: number }, res: Response) => {
 });
 
 // Update a todo
-router.put("/:id", (req: Request & { userId?: number }, res: Response) => {
-  const { id } = req.params;
-  const { task, completed } = req.body;
-  if (!task) {
-    res.status(400).json({ message: "Task is required" });
-    return;
+router.put(
+  "/:id",
+  async (req: Request & { userId?: number }, res: Response) => {
+    const { id } = req.params;
+    const { task, completed } = req.body;
+    if (!req.userId) {
+      res.status(401).json({ message: "User not authenticated" });
+      return;
+    }
+    if (!task) {
+      res.status(400).json({ message: "Task is required" });
+      return;
+    }
+    try {
+      const updateTodo = await prisma.todo.update({
+        where: { id: Number(id), userId: req.userId },
+        data: { task, completed: !!completed },
+      });
+      res.json(updateTodo);
+    } catch (error) {
+      console.error("Error updating todo:", error);
+      res.status(500).json({ message: "Error updating todo" });
+    }
   }
-  try {
-    const updateTodo = db.prepare(
-      "UPDATE todos SET task = ?, completed = ? WHERE id = ? AND user_id = ?"
-    );
-    updateTodo.run(task, completed ? 1 : 0, id, req.userId);
-    res.json({ message: "Todo updated" });
-  } catch (error) {
-    console.error("Error updating todo:", error);
-    res.status(500).json({ message: "Error updating todo" });
-  }
-});
+);
 
 // Delete a todo
-router.delete("/:id", (req: Request & { userId?: number }, res: Response) => {
-  const { id } = req.params;
-  try {
-    const deleteTodo = db.prepare(
-      "DELETE FROM todos WHERE id = ? AND user_id = ?"
-    );
-    deleteTodo.run(id, req.userId);
-    res.json({ message: "Todo deleted" });
-  } catch (error) {
-    console.error("Error deleting todo:", error);
-    res.status(500).json({ message: "Error deleting todo" });
+router.delete(
+  "/:id",
+  async (req: Request & { userId?: number }, res: Response) => {
+    const { id } = req.params;
+    if (!req.userId) {
+      res.status(401).json({ message: "User not authenticated" });
+      return;
+    }
+    try {
+      await prisma.todo.delete({
+        where: { id: Number(id), userId: req.userId },
+      });
+      res.json({ message: "Todo deleted" });
+    } catch (error) {
+      console.error("Error deleting todo:", error);
+      res.status(500).json({ message: "Error deleting todo" });
+    }
   }
-});
+);
 
 export default router;
